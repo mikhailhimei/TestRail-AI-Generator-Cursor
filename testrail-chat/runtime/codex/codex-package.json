@@ -1,0 +1,10 @@
+{
+  "layoutVersion": 1,
+  "version": "0.167.2",
+  "target": "x86_64-pc-windows-msvc",
+  "variant": "codex",
+  "entrypoint": "codex-x86_64-pc-windows-msvc.exe",
+  "execServer": "bin/codex-exec-server.exe",
+  "resourcesDir": "codex-resources",
+  "pathDir": "codex-path"
+}

@@ -1,7 +1,6 @@
 .codex-bridge/
-.codex/
+node_modules/
 .env
-.env.*
-!.env.example
-auth.json
 *.log
+*.zip
+auth.json

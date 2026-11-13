@@ -1,24 +1,30 @@
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { timingSafeEqual } from 'node:crypto';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
+import { createChatChannel } from './codex-chat.mjs';
+import { bridgeStateRoot, ensureBridgeToken, confirmDesktopPair } from './codex-runtime.mjs';
 
 const MAX_BODY = 12 * 1024 * 1024;
 const TIMEOUT = 300_000;
 
-function codexCommand() {
-  const configured = process.env.CODEX_BIN;
+export function codexCommand({ env = process.env, platform = process.platform,
+  directory = path.dirname(fileURLToPath(import.meta.url)) } = {}) {
+  const configured = env.CODEX_BIN;
   if (configured) return /\.[cm]?js$/i.test(configured)
     ? [process.execPath, [configured]] : [configured, []];
-  if (process.platform === 'win32') {
-    const portable = path.join(path.dirname(fileURLToPath(import.meta.url)), 'codex', 'codex-x86_64-pc-windows-msvc.exe');
-    if (existsSync(portable)) return [portable, []];
-    const dirs = (process.env.PATH || '').split(path.delimiter).map(dir => dir.replace(/^"|"$/g, ''));
+  if (platform === 'win32') {
+    const portableCandidates = [
+      path.join(directory, 'codex', 'codex-x86_64-pc-windows-msvc.exe'),
+      path.resolve(directory, '..', 'vendor', 'codex', 'windows-x64', 'codex-x86_64-pc-windows-msvc.exe')
+    ];
+    for (const portable of portableCandidates) if (existsSync(portable)) return [portable, []];
+    const dirs = (env.PATH || '').split(path.delimiter).map(dir => dir.replace(/^"|"$/g, ''));
     for (const dir of dirs) {
       if (!dir) continue;
       const exe = path.join(dir, 'codex.exe');
@@ -31,7 +37,7 @@ function codexCommand() {
   return ['codex', []];
 }
 
-export async function runCodex({ prompt, systemPrompt, model, images }, signal, onModel = () => {}) {
+export async function runCodex({ prompt, systemPrompt, model, images, task = 'cases' }, signal, onModel = () => {}) {
   const dir = await mkdtemp(path.join(tmpdir(), 'testrail-codex-'));
   try {
     const output = path.join(dir, 'response.txt');
@@ -69,7 +75,7 @@ export async function runCodex({ prompt, systemPrompt, model, images }, signal, 
           if (match && !reportedModel) {
             reportedModel = true;
             onModel(match[1]);
-            console.info(`[Codex] Model: ${match[1]}`);
+            console.error(`[Codex] Model: ${match[1]}`);
           }
         }
         headerBuffer = headerBuffer.slice(-8192);
@@ -86,7 +92,10 @@ export async function runCodex({ prompt, systemPrompt, model, images }, signal, 
         reject(new Error(`Codex CLI завершился с кодом ${code}.${detail
           ? `\n${detail}` : ' CLI не сообщил причину. Проверьте вход и доступ к выбранной модели.'}`));
       });
-      child.stdin.end(`Сформируй тест-кейсы. Верни только JSON с массивом cases. Не используй инструменты и не изменяй файлы.\n\nИНСТРУКЦИЯ:\n${systemPrompt}\n\nЗАДАЧА:\n${prompt}`);
+      const instruction = task === 'specification'
+        ? 'Составь спецификацию. Верни только Markdown без внешнего блока кода и без JSON.'
+        : 'Сформируй тест-кейсы. Верни только JSON с массивом cases.';
+      child.stdin.end(`${instruction} Не используй инструменты и не изменяй файлы.\n\nИНСТРУКЦИЯ:\n${systemPrompt}\n\nЗАДАЧА:\n${prompt}`);
     });
     const text = await readFile(output, 'utf8');
     if (!text.trim()) throw new Error('Codex вернул пустой ответ');
@@ -96,20 +105,25 @@ export async function runCodex({ prompt, systemPrompt, model, images }, signal, 
 
 function validPayload(data) {
   return data && typeof data.prompt === 'string' && typeof data.systemPrompt === 'string' &&
+    (data.task === undefined || data.task === 'cases' || data.task === 'specification') &&
     (data.prompt.trim() || data.images?.length) && data.prompt.length <= 200_000 &&
     data.systemPrompt.length <= 200_000 && typeof data.model === 'string' && data.model.length <= 200 &&
     Array.isArray(data.images) && data.images.length <= 2 && data.images.every(image =>
       typeof image === 'string' && /^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/.test(image));
 }
 
-export function createBridge({ token, generate = runCodex, timeoutMs = TIMEOUT, confirmPair = async () => false }) {
+export function createBridge({ token, generate = runCodex, timeoutMs = TIMEOUT, confirmPair = async () => false, chatOptions }) {
   if (!token || token.length < 32) throw new Error('Токен сервера должен содержать минимум 32 символа');
   let busy = false;
   let pairing = false;
   let activeModel = null;
-  return http.createServer(async (req, res) => {
+  const chat = createChatChannel(chatOptions);
+  const server = http.createServer(async (req, res) => {
     const origin = req.headers.origin;
     const reply = (status, body) => {
+      if (req.method === 'POST' && req.url === '/extension/poll' && /^chrome-extension:\/\/[a-p]{32}$/.test(origin || '')) {
+        chat.recordSync({ origin, status, error: typeof body?.error === 'string' ? body.error : undefined });
+      }
       if (!res.destroyed) { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); }
     };
     if (origin && !/^chrome-extension:\/\/[a-p]{32}$/.test(origin)) return reply(403, { error: 'Источник запрещён' });
@@ -136,6 +150,30 @@ export function createBridge({ token, generate = runCodex, timeoutMs = TIMEOUT, 
     const expected = Buffer.from(`Bearer ${token}`);
     if (auth.length !== expected.length || !timingSafeEqual(auth, expected)) return reply(401, { error: 'Неверный токен локального сервера' });
     if (req.method === 'GET' && req.url === '/health') return reply(200, { status: 'ok', busy, model: activeModel });
+    if (['/mcp', '/extension/poll', '/extension/result'].includes(req.url)) {
+      if (req.method === 'GET' && req.url === '/mcp') return reply(405, { error: 'Use POST for stateless MCP' });
+      if (req.method !== 'POST') return reply(405, { error: 'Ожидается POST' });
+      if (req.url.startsWith('/extension/') && !origin) return reply(403, { error: 'Требуется расширение Chrome' });
+      if (req.url === '/mcp' && origin) return reply(403, { error: 'MCP доступен только локальному клиенту' });
+      if (!req.headers['content-type']?.startsWith('application/json')) return reply(415, { error: 'Ожидается application/json' });
+      try {
+        let size = 0;
+        const chunks = [];
+        for await (const chunk of req) {
+          size += chunk.length;
+          if (size > MAX_BODY) return reply(413, { error: 'Запрос слишком большой' });
+          chunks.push(chunk);
+        }
+        let data;
+        try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+        catch { return reply(400, { error: 'Некорректный JSON' }); }
+        if (req.url === '/extension/poll') return reply(200, chat.poll(data));
+        if (req.url === '/extension/result') return reply(200, { accepted: chat.complete(data) });
+        const result = await chat.rpc(data);
+        if (result === null) { res.writeHead(202); res.end(); return; }
+        return reply(200, result);
+      } catch (error) { return reply(400, { error: error instanceof Error ? error.message : 'Ошибка канала чата' }); }
+    }
     if (req.method !== 'POST' || req.url !== '/generate') return reply(404, { error: 'Маршрут не найден' });
     if (!req.headers['content-type']?.startsWith('application/json')) return reply(415, { error: 'Ожидается application/json' });
     if (busy) return reply(409, { error: 'Codex уже обрабатывает запрос' });
@@ -174,24 +212,16 @@ export function createBridge({ token, generate = runCodex, timeoutMs = TIMEOUT, 
       if (ownsJob) busy = false;
     }
   });
+  server.once('close', () => chat.close());
+  return server;
 }
 
 async function main() {
-  const dir = path.resolve('.codex-bridge');
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  const tokenFile = path.join(dir, 'token');
-  let token = process.env.CODEX_BRIDGE_TOKEN;
-  if (!token) {
-    try { token = (await readFile(tokenFile, 'utf8')).trim(); }
-    catch (err) {
-      if (err.code !== 'ENOENT') throw err;
-      token = randomBytes(32).toString('hex');
-      await writeFile(tokenFile, token, { mode: 0o600, flag: 'wx' });
-    }
-  }
+  const token = await ensureBridgeToken(bridgeStateRoot(), [process.cwd()]);
   const port = Number(process.env.CODEX_BRIDGE_PORT || 3210);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Неверный CODEX_BRIDGE_PORT');
   const server = createBridge({ token, confirmPair: async origin => {
+    if (process.platform === 'win32') return confirmDesktopPair(origin);
     const terminal = createInterface({ input: process.stdin, output: process.stdout });
     try {
       const answer = await terminal.question(
@@ -204,7 +234,10 @@ async function main() {
   server.on('error', err => { console.error(err.message); process.exitCode = 1; });
   server.listen(port, '127.0.0.1', () => {
     console.log(`Codex bridge: http://127.0.0.1:${port}`);
-    console.log('В настройках расширения нажмите «Подключить Codex» и подтвердите подключение в этом окне.');
+    console.log(process.platform === 'win32'
+      ? 'В расширении нажмите «Подключить чат» или «Подключить Codex» и выберите «Да» в отдельном окне Windows.'
+      : 'В настройках расширения нажмите «Подключить Codex» и подтвердите подключение в этом окне.');
+    console.log('Генерация из расширения и команды из чата работают одновременно. Подключение чата: README.txt.');
   });
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
