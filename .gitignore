@@ -1,0 +1,7 @@
+.codex-bridge/
+.codex/
+.env
+.env.*
+!.env.example
+auth.json
+*.log
