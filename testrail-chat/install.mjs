@@ -31,4 +31,4 @@ if (!process.env.CODEX_INSTALL_CLI && process.platform === 'win32') {
 execFileSync(cli, ['plugin', 'marketplace', 'add', marketplace], { stdio: 'inherit', windowsHide: true });
 execFileSync(cli, ['plugin', 'add', `${manifest.name}@testrail-local`], { stdio: 'inherit', windowsHide: true });
 console.log('TestRail AI Generator установлен. Переподключите MCP / откройте новую беседу и выберите плагин.');
-console.log('Сервер включён в плагин и запускается автоматически. Отдельно запускать Start Windows.cmd не требуется.');
+console.log('Сервер включён в плагин и запускается автоматически при подключении к новому чату.');

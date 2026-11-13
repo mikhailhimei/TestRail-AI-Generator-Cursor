@@ -14,5 +14,5 @@ if errorlevel 1 (
   exit /b 1
 )
 echo Plugin installed. Restart the MCP connection or open a new chat.
-echo Start Windows.cmd is not required when using chat.
+echo The plugin starts its server automatically.
 pause
