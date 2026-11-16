@@ -6,9 +6,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
-import { createInterface } from 'node:readline/promises';
 import { createChatChannel } from './codex-chat.mjs';
-import { bridgeStateRoot, ensureBridgeToken, confirmDesktopPair } from './codex-runtime.mjs';
+import { createAutotestJobs } from './codex-autotests.mjs';
 
 const MAX_BODY = 12 * 1024 * 1024;
 const TIMEOUT = 300_000;
@@ -112,12 +111,13 @@ function validPayload(data) {
       typeof image === 'string' && /^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/.test(image));
 }
 
-export function createBridge({ token, generate = runCodex, timeoutMs = TIMEOUT, confirmPair = async () => false, chatOptions }) {
+export function createBridge({ token, generate = runCodex, timeoutMs = TIMEOUT, confirmPair = async () => false, chatOptions, autotestOptions }) {
   if (!token || token.length < 32) throw new Error('Токен сервера должен содержать минимум 32 символа');
   let busy = false;
   let pairing = false;
   let activeModel = null;
   const chat = createChatChannel(chatOptions);
+  const autotests = createAutotestJobs({ command: codexCommand, ...autotestOptions });
   const server = http.createServer(async (req, res) => {
     const origin = req.headers.origin;
     const reply = (status, body) => {
@@ -149,7 +149,35 @@ export function createBridge({ token, generate = runCodex, timeoutMs = TIMEOUT, 
     const auth = Buffer.from(req.headers.authorization || '');
     const expected = Buffer.from(`Bearer ${token}`);
     if (auth.length !== expected.length || !timingSafeEqual(auth, expected)) return reply(401, { error: 'Неверный токен локального сервера' });
-    if (req.method === 'GET' && req.url === '/health') return reply(200, { status: 'ok', busy, model: activeModel });
+    if (req.method === 'GET' && req.url === '/health') return reply(200, { status: 'ok', busy: busy || autotests.busy, model: activeModel });
+    if (req.url?.startsWith('/autotests/')) {
+      if (req.method !== 'POST') return reply(405, { error: 'Ожидается POST' });
+      if (!origin) return reply(403, { error: 'Запуск АТ доступен только из расширения Chrome' });
+      if (!req.headers['content-type']?.startsWith('application/json')) return reply(415, { error: 'Ожидается application/json' });
+      try {
+        const chunks = [];
+        let size = 0;
+        for await (const chunk of req) {
+          size += chunk.length;
+          if (size > MAX_BODY) return reply(413, { error: 'Запрос слишком большой' });
+          chunks.push(chunk);
+        }
+        let data;
+        try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+        catch { return reply(400, { error: 'Некорректный JSON' }); }
+        if (req.url === '/autotests/start') {
+          if (busy || autotests.busy) return reply(409, { error: 'Codex уже обрабатывает запрос' });
+          // Reserve the shared CLI slot before asynchronous project validation.
+          busy = true;
+          try { return reply(202, await autotests.start(data)); }
+          finally { busy = false; }
+        }
+        if (!data || typeof data.id !== 'string') return reply(400, { error: 'Укажите ID задачи' });
+        const job = req.url === '/autotests/status' ? autotests.get(data.id)
+          : req.url === '/autotests/cancel' ? autotests.cancel(data.id) : null;
+        return job ? reply(200, job) : reply(404, { error: 'Задача не найдена. Возможно, сервер был перезапущен.' });
+      } catch (error) { return reply(400, { error: error instanceof Error ? error.message : 'Ошибка запуска АТ' }); }
+    }
     if (['/mcp', '/extension/poll', '/extension/result'].includes(req.url)) {
       if (req.method === 'GET' && req.url === '/mcp') return reply(405, { error: 'Use POST for stateless MCP' });
       if (req.method !== 'POST') return reply(405, { error: 'Ожидается POST' });
@@ -176,7 +204,7 @@ export function createBridge({ token, generate = runCodex, timeoutMs = TIMEOUT, 
     }
     if (req.method !== 'POST' || req.url !== '/generate') return reply(404, { error: 'Маршрут не найден' });
     if (!req.headers['content-type']?.startsWith('application/json')) return reply(415, { error: 'Ожидается application/json' });
-    if (busy) return reply(409, { error: 'Codex уже обрабатывает запрос' });
+    if (busy || autotests.busy) return reply(409, { error: 'Codex уже обрабатывает запрос' });
     const controller = new AbortController();
     const disconnect = () => controller.abort();
     res.once('close', disconnect);
@@ -194,7 +222,7 @@ export function createBridge({ token, generate = runCodex, timeoutMs = TIMEOUT, 
       try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { return reply(400, { error: 'Некорректный JSON' }); }
       if (!validPayload(data)) return reply(400, { error: 'Некорректный запрос генерации' });
-      if (busy) return reply(409, { error: 'Codex уже обрабатывает запрос' });
+      if (busy || autotests.busy) return reply(409, { error: 'Codex уже обрабатывает запрос' });
       if (controller.signal.aborted) return;
       busy = true;
       activeModel = null;
@@ -212,34 +240,7 @@ export function createBridge({ token, generate = runCodex, timeoutMs = TIMEOUT, 
       if (ownsJob) busy = false;
     }
   });
-  server.once('close', () => chat.close());
+  server.once('close', () => { chat.close(); autotests.close(); });
   return server;
 }
 
-async function main() {
-  const token = await ensureBridgeToken(bridgeStateRoot(), [process.cwd()]);
-  const port = Number(process.env.CODEX_BRIDGE_PORT || 3210);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Неверный CODEX_BRIDGE_PORT');
-  const server = createBridge({ token, confirmPair: async origin => {
-    if (process.platform === 'win32') return confirmDesktopPair(origin);
-    const terminal = createInterface({ input: process.stdin, output: process.stdout });
-    try {
-      const answer = await terminal.question(
-        `\nРасширение ${origin} запрашивает подключение к Codex.\nЕсли вы нажали «Подключить Codex», введите y и нажмите Enter: `,
-        { signal: AbortSignal.timeout(60_000) });
-      return ['y', 'yes', 'да'].includes(answer.trim().toLowerCase());
-    } finally { terminal.close(); }
-  } });
-  server.requestTimeout = 30_000;
-  server.on('error', err => { console.error(err.message); process.exitCode = 1; });
-  server.listen(port, '127.0.0.1', () => {
-    console.log(`Codex bridge: http://127.0.0.1:${port}`);
-    console.log(process.platform === 'win32'
-      ? 'В расширении нажмите «Подключить чат» или «Подключить Codex» и выберите «Да» в отдельном окне Windows.'
-      : 'В настройках расширения нажмите «Подключить Codex» и подтвердите подключение в этом окне.');
-    console.log('Генерация из расширения и команды из чата работают одновременно. Подключение чата: README.txt.');
-  });
-}
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch(err => { console.error(err.message); process.exitCode = 1; });
-}
