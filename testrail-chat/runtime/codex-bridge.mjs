@@ -9,6 +9,8 @@ import { existsSync } from 'node:fs';
 import { createChatChannel } from './codex-chat.mjs';
 import { createAutotestJobs } from './codex-autotests.mjs';
 
+import { runLocalAgent } from './local-agents.mjs';
+
 const MAX_BODY = 12 * 1024 * 1024;
 const TIMEOUT = 300_000;
 
@@ -102,6 +104,24 @@ export async function runCodex({ prompt, systemPrompt, model, images, task = 'ca
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
 
+async function generateLocalAgent(agent, { prompt, systemPrompt, model, images, task }, signal, onModel) {
+  const cwd = await mkdtemp(path.join(tmpdir(), 'testrail-agent-'));
+  try {
+    const attachments = [];
+    for (const [i, image] of images.entries()) {
+      const [, format, base64] = /^data:image\/(png|jpe?g|webp);base64,(.+)$/.exec(image);
+      const file = path.join(cwd, `image-${i}.${format}`);
+      await writeFile(file, Buffer.from(base64, 'base64'));
+      attachments.push(file);
+    }
+    const instruction = task === 'specification'
+      ? 'Составь спецификацию. Верни только Markdown без внешнего блока кода и без JSON.'
+      : 'Сформируй тест-кейсы. Верни только JSON с массивом cases.';
+    return await runLocalAgent({ agent, cwd, model, attachments, signal, onModel,
+      prompt: `${instruction} Не изменяй файлы. Используй только переданные данные и вложения.\n\nИНСТРУКЦИЯ:\n${systemPrompt}\n\nЗАДАЧА:\n${prompt}` });
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+}
+
 function validPayload(data) {
   return data && typeof data.prompt === 'string' && typeof data.systemPrompt === 'string' &&
     (data.task === undefined || data.task === 'cases' || data.task === 'specification') &&
@@ -116,6 +136,7 @@ export function createBridge({ token, generate = runCodex, timeoutMs = TIMEOUT, 
   let busy = false;
   let pairing = false;
   let activeModel = null;
+  let activeAgent = 'codex';
   const chat = createChatChannel(chatOptions);
   const autotests = createAutotestJobs({ command: codexCommand, ...autotestOptions });
   const server = http.createServer(async (req, res) => {
@@ -143,13 +164,15 @@ export function createBridge({ token, generate = runCodex, timeoutMs = TIMEOUT, 
         if (!await confirmPair(origin)) return reply(403, { error: 'Подключение не подтверждено в окне сервера' });
         return reply(200, { token });
       } catch {
-        return reply(408, { error: 'Время подтверждения истекло. Нажмите «Подключить Codex» ещё раз.' });
+        return reply(408, { error: 'Время подтверждения истекло. Повторите подключение.' });
       } finally { pairing = false; }
     }
     const auth = Buffer.from(req.headers.authorization || '');
     const expected = Buffer.from(`Bearer ${token}`);
     if (auth.length !== expected.length || !timingSafeEqual(auth, expected)) return reply(401, { error: 'Неверный токен локального сервера' });
-    if (req.method === 'GET' && req.url === '/health') return reply(200, { status: 'ok', busy: busy || autotests.busy, model: activeModel });
+    const health = /^\/health(?:\/(gemini-mcp|copilot-mcp))?$/.exec(req.url);
+    if (req.method === 'GET' && health) return reply(200, { status: 'ok', busy: busy || autotests.busy,
+      model: activeAgent === (health[1] || 'codex') ? activeModel : null });
     if (req.url?.startsWith('/autotests/')) {
       if (req.method !== 'POST') return reply(405, { error: 'Ожидается POST' });
       if (!origin) return reply(403, { error: 'Запуск АТ доступен только из расширения Chrome' });
@@ -165,11 +188,12 @@ export function createBridge({ token, generate = runCodex, timeoutMs = TIMEOUT, 
         let data;
         try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
         catch { return reply(400, { error: 'Некорректный JSON' }); }
-        if (req.url === '/autotests/start') {
-          if (busy || autotests.busy) return reply(409, { error: 'Codex уже обрабатывает запрос' });
+        const start = /^\/autotests(?:\/(gemini-mcp|copilot-mcp))?\/start$/.exec(req.url);
+        if (start) {
+          if (busy || autotests.busy) return reply(409, { error: 'Локальный сервер уже обрабатывает запрос' });
           // Reserve the shared CLI slot before asynchronous project validation.
           busy = true;
-          try { return reply(202, await autotests.start(data)); }
+          try { return reply(202, await autotests.start(data, start[1])); }
           finally { busy = false; }
         }
         if (!data || typeof data.id !== 'string') return reply(400, { error: 'Укажите ID задачи' });
@@ -202,9 +226,10 @@ export function createBridge({ token, generate = runCodex, timeoutMs = TIMEOUT, 
         return reply(200, result);
       } catch (error) { return reply(400, { error: error instanceof Error ? error.message : 'Ошибка канала чата' }); }
     }
-    if (req.method !== 'POST' || req.url !== '/generate') return reply(404, { error: 'Маршрут не найден' });
+    const generation = /^\/generate(?:\/(gemini-mcp|copilot-mcp))?$/.exec(req.url);
+    if (req.method !== 'POST' || !generation) return reply(404, { error: 'Маршрут не найден' });
     if (!req.headers['content-type']?.startsWith('application/json')) return reply(415, { error: 'Ожидается application/json' });
-    if (busy || autotests.busy) return reply(409, { error: 'Codex уже обрабатывает запрос' });
+    if (busy || autotests.busy) return reply(409, { error: 'Локальный сервер уже обрабатывает запрос' });
     const controller = new AbortController();
     const disconnect = () => controller.abort();
     res.once('close', disconnect);
@@ -222,13 +247,17 @@ export function createBridge({ token, generate = runCodex, timeoutMs = TIMEOUT, 
       try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { return reply(400, { error: 'Некорректный JSON' }); }
       if (!validPayload(data)) return reply(400, { error: 'Некорректный запрос генерации' });
-      if (busy || autotests.busy) return reply(409, { error: 'Codex уже обрабатывает запрос' });
+      if (busy || autotests.busy) return reply(409, { error: 'Локальный сервер уже обрабатывает запрос' });
       if (controller.signal.aborted) return;
       busy = true;
       activeModel = null;
       ownsJob = true;
       timer = setTimeout(() => controller.abort(), timeoutMs);
-      const text = await generate(data, controller.signal, model => { activeModel = model; });
+      activeAgent = generation[1] || 'codex';
+      const onModel = model => { activeModel = model; };
+      const text = generation[1]
+        ? await generateLocalAgent(activeAgent, data, controller.signal, onModel)
+        : await generate(data, controller.signal, onModel);
       reply(200, { text, model: activeModel });
     } catch (err) {
       reply(controller.signal.aborted ? 504 : 502, { error: controller.signal.aborted
