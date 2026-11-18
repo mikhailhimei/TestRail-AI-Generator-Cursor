@@ -1,0 +1,71 @@
+"""Build the three CLI plugin archives from the checked-out source."""
+import sys
+from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+
+source = Path(__file__).resolve().parents[1]
+plugin = source / "testrail-chat"
+destination = Path(sys.argv[1]).resolve()
+destination.mkdir(parents=True, exist_ok=True)
+
+guides = {
+    "gemini": """# TestRail для Gemini CLI
+
+Windows, macOS и Linux. Запустите установщик своей ОС из этого архива.
+Для установки CLI нужен Node.js 22.12+; при скачивании также нужны npm и curl.
+Авторизуйтесь в Gemini CLI и подключите MCP:
+
+    gemini mcp add --scope user testrail-extension node "/полный/путь/testrail-chat/server.mjs"
+
+Откройте Gemini в доверенной папке, выберите Gemini MCP в расширении Chrome и подтвердите подключение.
+""",
+    "copilot": """# TestRail для GitHub Copilot
+
+Windows, macOS и Linux. Для запуска генерации и АТ из Chrome запустите установщик своей ОС.
+Для установки CLI нужен Node.js 22.12+; при скачивании также нужны npm и curl.
+Выполните вход в Copilot CLI.
+
+Для работы из чата VS Code добавьте сервер в объект mcpServers в
+~/.copilot/mcp-config.json или .mcp.json проекта:
+
+    "testrail-extension": { "type": "stdio", "command": "node", "args": ["/полный/путь/testrail-chat/server.mjs"] }
+
+Запустите сервер из чата и выберите Copilot MCP в расширении Chrome.
+""",
+}
+
+
+def add_file(archive, name, data):
+    entry = ZipInfo("testrail-chat/" + name)
+    executable = name.endswith((".sh", ".command"))
+    entry.external_attr = (0o100755 if executable else 0o100644) << 16
+    if name.endswith(".cmd"):
+        data = data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    elif executable:
+        data = data.replace(b"\r\n", b"\n")
+    archive.writestr(entry, data, compress_type=ZIP_DEFLATED)
+
+
+common = ["server.mjs", "bridge-client.mjs", "install-cli.mjs"]
+common += [file.relative_to(plugin).as_posix() for file in sorted((plugin / "runtime").glob("*.mjs"))]
+for agent in ("codex", "gemini", "copilot"):
+    archive_path = destination / f"testrail-chat-plugin-{agent}.zip"
+    with ZipFile(archive_path, "w") as archive:
+        for name in common:
+            add_file(archive, name, (plugin / name).read_bytes())
+        if agent == "codex":
+            for file in sorted(plugin.iterdir()):
+                if file.is_file() and file.name not in common:
+                    add_file(archive, file.name, file.read_bytes())
+        else:
+            launchers = source / "installers"
+            add_file(archive, "Install Windows.cmd", (launchers / "Install Windows.cmd").read_bytes())
+            unix = (launchers / "Install Linux.sh").read_bytes()
+            add_file(archive, "Install Linux.sh", unix)
+            add_file(archive, "Install macOS.command", unix)
+            add_file(archive, "README.md", guides[agent].encode())
+            add_file(archive, "provider.txt", (agent + "\n").encode())
+    with ZipFile(archive_path) as archive:
+        if archive.testzip() is not None:
+            raise ValueError(f"Invalid ZIP: {archive_path}")
+    print(f"{archive_path.name}: {archive_path.stat().st_size:,} bytes")

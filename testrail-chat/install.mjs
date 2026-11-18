@@ -1,13 +1,16 @@
-import { access, cp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
+import { ensureCli } from './install-cli.mjs';
+import { codexCommand } from './runtime/codex-bridge.mjs';
 
 const source = path.dirname(fileURLToPath(import.meta.url));
 const runtime = await import(pathToFileURL(path.join(source, 'runtime', 'codex-runtime.mjs')).href);
 const manifest = JSON.parse(await readFile(path.join(source, 'plugin.json'), 'utf8'));
 const [major, minor] = process.versions.node.split('.').map(Number);
 if (major < 22 || (major === 22 && minor < 12)) throw Error('Требуется Node.js 22.12 или новее');
+if (!process.env.CODEX_INSTALL_CLI) await ensureCli('codex');
 // State is outside the plugin cache and survives plugin updates.
 const root = runtime.bridgeStateRoot();
 const legacyState = process.argv.includes('--legacy-state') ? process.argv[process.argv.indexOf('--legacy-state') + 1] : path.dirname(source);
@@ -23,12 +26,10 @@ await writeFile(path.join(catalogDirectory, 'marketplace.json'), JSON.stringify(
   plugins: [{ name: manifest.name, source: { source: 'local', path: `./plugins/${manifest.name}` },
     policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' }, category: 'Productivity' }]
 }, null, 2));
-let cli = process.env.CODEX_INSTALL_CLI || 'codex';
-if (!process.env.CODEX_INSTALL_CLI && process.platform === 'win32') {
-  const portable = path.join(destination, 'runtime', 'codex', 'codex-x86_64-pc-windows-msvc.exe');
-  try { await access(portable); cli = portable; } catch {}
-}
-execFileSync(cli, ['plugin', 'marketplace', 'add', marketplace], { stdio: 'inherit', windowsHide: true });
-execFileSync(cli, ['plugin', 'add', `${manifest.name}@testrail-local`], { stdio: 'inherit', windowsHide: true });
+const [cli, prefix] = process.env.CODEX_INSTALL_CLI
+  ? codexCommand({ env: { ...process.env, CODEX_BIN: process.env.CODEX_INSTALL_CLI } })
+  : codexCommand();
+execFileSync(cli, [...prefix, 'plugin', 'marketplace', 'add', marketplace], { stdio: 'inherit', windowsHide: true });
+execFileSync(cli, [...prefix, 'plugin', 'add', `${manifest.name}@testrail-local`], { stdio: 'inherit', windowsHide: true });
 console.log('TestRail AI Generator установлен. Переподключите MCP / откройте новую беседу и выберите плагин.');
 console.log('Сервер включён в плагин и запускается автоматически при подключении к новому чату.');
