@@ -6,11 +6,13 @@
 
 Скачайте архив своей системы со [страницы релизов](https://github.com/mikhailhimei/TestRail-AI-Generator-Cursor/releases). Клонировать репозиторий не нужно. Требуется Node.js 22.12 или новее.
 
-| Система | Архив | Установщик |
-| --- | --- | --- |
-| Windows x64 | `testrail-chat-plugin.zip` | `Install Windows.cmd` |
-| macOS | `testrail-chat-plugin-unix.zip` | `Install macOS.command` |
-| Linux | `testrail-chat-plugin-unix.zip` | `sh "Install Linux.sh"` |
+Скачайте `testrail-chat-plugin-codex.zip` для любой из трёх ОС.
+
+| Система | Установщик |
+| --- | --- |
+| Windows x64 | `Install Windows.cmd` |
+| macOS | `Install macOS.command` |
+| Linux | `sh "Install Linux.sh"` |
 
 Распакуйте весь архив и запустите указанный установщик из папки `testrail-chat`. В Windows Codex CLI входит в архив. На macOS/Linux установщик использует системный Codex CLI и при отсутствии устанавливает его через npm. В Linux нужны графический сеанс и пакет `zenity` для окна подтверждения; в macOS используется штатный `osascript`.
 
@@ -28,7 +30,7 @@
 
 ## Подключение Gemini CLI и GitHub Copilot
 
-Скачайте `testrail-mcp.zip` и `testrail-chrome-extension.zip` из одного релиза. Нужен Node.js 22.12 или новее. Распакуйте оба архива. На странице `chrome://extensions` включите режим разработчика и загрузите папку Chrome-расширения, в которой находится `manifest.json`.
+Скачайте `testrail-chat-plugin-gemini.zip` или `testrail-chat-plugin-copilot.zip` для своего агента и `testrail-chrome-extension.zip` из того же релиза. Оба MCP-архива подходят для Windows, macOS и Linux. Нужен Node.js 22.12 или новее. Распакуйте оба архива. На странице `chrome://extensions` включите режим разработчика и загрузите папку Chrome-расширения, в которой находится `manifest.json`.
 
 - **Gemini CLI.** Установите Gemini CLI, выполните вход и из терминала добавьте сервер командой `gemini mcp add --scope user testrail-extension node "/полный/путь/testrail-chat/server.mjs"`. Запустите `gemini` в доверенной папке. Команда `/mcp list` покажет подключение.
 - **Copilot в VS Code.** Добавьте сервер в пользовательский `~/.copilot/mcp-config.json` или в `.mcp.json` проекта. В объекте `mcpServers` добавьте запись `"testrail-extension": { "type": "stdio", "command": "node", "args": ["/полный/путь/testrail-chat/server.mjs"] }`. Откройте чат Copilot и запустите сервер.
