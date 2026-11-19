@@ -40,8 +40,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          if ! gh release view v1.5.6 >/dev/null 2>&1; then
-            gh release create v1.5.6 --draft --target "${{ github.sha }}" --title 'v1.5.6 — Докачка CLI при медленном соединении' --notes-file release-artifacts/v1.5.6/notes.md
+          if ! gh release view v1.5.7 >/dev/null 2>&1; then
+            gh release create v1.5.7 --draft --target "${{ github.sha }}" --title 'v1.5.7 — Чтение исходников на Windows' --notes-file release-artifacts/v1.5.7/notes.md
           fi
-          gh release upload v1.5.6 release-dist/* --clobber
-          gh release edit v1.5.6 --draft=false --latest --title 'v1.5.6 — Докачка CLI при медленном соединении' --notes-file release-artifacts/v1.5.6/notes.md
+          gh release upload v1.5.7 release-dist/* --clobber
+          gh release edit v1.5.7 --draft=false --latest --title 'v1.5.7 — Чтение исходников на Windows' --notes-file release-artifacts/v1.5.7/notes.md
