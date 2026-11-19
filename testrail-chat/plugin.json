@@ -1,14 +1,16 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "testrail-chat",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "description": "Work with TestRail AI Generator from chat using the bundled server, started automatically.",
-  "author": { "name": "mikhailhimei" },
+  "author": {
+    "name": "mikhailhimei"
+  },
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "TestRail AI Generator",
-        "shortDescription": "Кейсы и спеки из чата",
+        "shortDescription": "Кейсы, спеки и JSON-моки из чата",
         "longDescription": "Чтение задачи и промптов расширения, создание и редактирование черновиков тест-кейсов и спецификаций. Локальный сервер входит в плагин и запускается при подключении.",
         "developerName": "mikhailhimei",
         "category": "Productivity",

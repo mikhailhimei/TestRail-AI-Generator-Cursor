@@ -93,7 +93,9 @@ export async function runCodex({ prompt, systemPrompt, model, images, task = 'ca
         reject(new Error(`Codex CLI завершился с кодом ${code}.${detail
           ? `\n${detail}` : ' CLI не сообщил причину. Проверьте вход и доступ к выбранной модели.'}`));
       });
-      const instruction = task === 'specification'
+      const instruction = task === 'mock'
+      ? 'Создай JSON-мок. Верни ровно один валидный JSON-документ без Markdown и пояснений.'
+      : task === 'specification'
         ? 'Составь спецификацию. Верни только Markdown без внешнего блока кода и без JSON.'
         : 'Сформируй тест-кейсы. Верни только JSON с массивом cases.';
       child.stdin.end(`${instruction} Не используй инструменты и не изменяй файлы.\n\nИНСТРУКЦИЯ:\n${systemPrompt}\n\nЗАДАЧА:\n${prompt}`);
@@ -114,7 +116,9 @@ async function generateLocalAgent(agent, { prompt, systemPrompt, model, images, 
       await writeFile(file, Buffer.from(base64, 'base64'));
       attachments.push(file);
     }
-    const instruction = task === 'specification'
+    const instruction = task === 'mock'
+      ? 'Создай JSON-мок. Верни ровно один валидный JSON-документ без Markdown и пояснений.'
+      : task === 'specification'
       ? 'Составь спецификацию. Верни только Markdown без внешнего блока кода и без JSON.'
       : 'Сформируй тест-кейсы. Верни только JSON с массивом cases.';
     return await runLocalAgent({ agent, cwd, model, attachments, signal, onModel,
@@ -124,7 +128,7 @@ async function generateLocalAgent(agent, { prompt, systemPrompt, model, images, 
 
 function validPayload(data) {
   return data && typeof data.prompt === 'string' && typeof data.systemPrompt === 'string' &&
-    (data.task === undefined || data.task === 'cases' || data.task === 'specification') &&
+    (data.task === undefined || data.task === 'cases' || data.task === 'specification' || data.task === 'mock') &&
     (data.prompt.trim() || data.images?.length) && data.prompt.length <= 200_000 &&
     data.systemPrompt.length <= 200_000 && typeof data.model === 'string' && data.model.length <= 200 &&
     Array.isArray(data.images) && data.images.length <= 2 && data.images.every(image =>

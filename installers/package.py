@@ -46,7 +46,7 @@ def add_file(archive, name, data):
     archive.writestr(entry, data, compress_type=ZIP_DEFLATED)
 
 
-common = ["server.mjs", "bridge-client.mjs", "install-cli.mjs"]
+common = ["server.mjs", "bridge-client.mjs", "install-cli.mjs", "JSON-MOCKS.md"]
 common += [file.relative_to(plugin).as_posix() for file in sorted((plugin / "runtime").glob("*.mjs"))]
 for agent in ("codex", "gemini", "copilot"):
     archive_path = destination / f"testrail-chat-plugin-{agent}.zip"
@@ -69,3 +69,17 @@ for agent in ("codex", "gemini", "copilot"):
         if archive.testzip() is not None:
             raise ValueError(f"Invalid ZIP: {archive_path}")
     print(f"{archive_path.name}: {archive_path.stat().st_size:,} bytes")
+
+if len(sys.argv) > 2:
+    extension = Path(sys.argv[2]).resolve()
+    if not (extension / "manifest.json").is_file():
+        raise ValueError("Extension build must contain manifest.json")
+    extension_archive = destination / "testrail-chrome-extension.zip"
+    with ZipFile(extension_archive, "w", ZIP_DEFLATED) as archive:
+        for file in sorted(extension.rglob("*")):
+            if file.is_file():
+                archive.write(file, file.relative_to(extension).as_posix())
+    with ZipFile(extension_archive) as archive:
+        if archive.testzip() is not None:
+            raise ValueError("Invalid extension ZIP")
+    print(f"{extension_archive.name}: {extension_archive.stat().st_size:,} bytes")
