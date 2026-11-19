@@ -1,10 +1,10 @@
 {
-  "release": "v1.5.4",
+  "release": "v1.5.5",
   "chrome_extension": {
     "repository": "mikhailhimei/TestRail-AI-Generator",
-    "commit": "06d9057d1c85273074fd0c83a226af4bbf044668",
+    "commit": "af27c35dd835ac30dea2ce773f23bdbae2b52f53",
     "branch": "release/json-mocks-all-mcp",
-    "manifest_version": "1.1.6",
+    "manifest_version": "1.1.7",
     "build": "npm ci && npm run build"
   },
   "verification": "node --test tests/*.test.mjs; extension build and mock/autotest suites"
