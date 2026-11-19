@@ -21,7 +21,7 @@ jobs:
       - name: Build and verify release archives
         run: |
           python3 installers/package.py release-dist
-          cp release-artifacts/v1.5.0/testrail-chrome-extension.zip release-dist/
+          cp release-artifacts/v1.5.1/testrail-chrome-extension.zip release-dist/
           python3 - <<'PY'
           import hashlib, json, zipfile
           from pathlib import Path
@@ -30,7 +30,7 @@ jobs:
               with zipfile.ZipFile(file) as archive:
                   assert archive.testzip() is None
                   if file.name == 'testrail-chrome-extension.zip':
-                      assert json.loads(archive.read('manifest.json'))['version'] == '1.1.2'
+                      assert json.loads(archive.read('manifest.json'))['version'] == '1.1.3'
                   else:
                       assert 'testrail-chat/runtime/codex-json-mocks.mjs' in archive.namelist()
           (root / 'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\n' for p in sorted(root.glob('*.zip'))))
@@ -40,8 +40,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          if ! gh release view v1.5.0 >/dev/null 2>&1; then
-            gh release create v1.5.0 --draft --target b0cbb8228ba0feda4b65e3d2927ee5b376ea0b69 --title 'v1.5.0 — JSON-моки для всех MCP-клиентов' --notes-file release-artifacts/v1.5.0/notes.md
+          if ! gh release view v1.5.1 >/dev/null 2>&1; then
+            gh release create v1.5.1 --draft --target "${{ github.sha }}" --title 'v1.5.1 — Чтение исходников из требований' --notes-file release-artifacts/v1.5.1/notes.md
           fi
-          gh release upload v1.5.0 release-dist/* --clobber
-          gh release edit v1.5.0 --draft=false --latest --title 'v1.5.0 — JSON-моки для всех MCP-клиентов' --notes-file release-artifacts/v1.5.0/notes.md
+          gh release upload v1.5.1 release-dist/* --clobber
+          gh release edit v1.5.1 --draft=false --latest --title 'v1.5.1 — Чтение исходников из требований' --notes-file release-artifacts/v1.5.1/notes.md
