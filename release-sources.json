@@ -1,5 +1,5 @@
 {
-  "release": "v1.5.5",
+  "release": "v1.5.6",
   "chrome_extension": {
     "repository": "mikhailhimei/TestRail-AI-Generator",
     "commit": "af27c35dd835ac30dea2ce773f23bdbae2b52f53",
