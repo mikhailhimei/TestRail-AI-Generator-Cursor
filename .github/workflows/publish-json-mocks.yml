@@ -21,7 +21,7 @@ jobs:
       - name: Build and verify release archives
         run: |
           python3 installers/package.py release-dist
-          cp release-artifacts/v1.5.7/testrail-chrome-extension.zip release-dist/
+          cp release-artifacts/v1.5.8/testrail-chrome-extension.zip release-dist/
           python3 - <<'PY'
           import hashlib, json, zipfile
           from pathlib import Path
@@ -40,8 +40,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          if ! gh release view v1.5.7 >/dev/null 2>&1; then
-            gh release create v1.5.7 --draft --target "${{ github.sha }}" --title 'v1.5.7 — Повторная отправка и Windows-пути' --notes-file release-artifacts/v1.5.7/notes.md
+          if draft=$(gh release view v1.5.8 --json isDraft --jq '.isDraft' 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo 'v1.5.8 is already published; use a new release version.'
+              exit 1
+            fi
+          else
+            gh release create v1.5.8 --draft --target "${{ github.sha }}" --title 'v1.5.8 — Повторная отправка и Windows-пути' --notes-file release-artifacts/v1.5.8/notes.md
           fi
-          gh release upload v1.5.7 release-dist/* --clobber
-          gh release edit v1.5.7 --draft=false --latest --title 'v1.5.7 — Повторная отправка и Windows-пути' --notes-file release-artifacts/v1.5.7/notes.md
+          gh release upload v1.5.8 release-dist/* --clobber
+          gh release edit v1.5.8 --draft=false --latest --title 'v1.5.8 — Повторная отправка и Windows-пути' --notes-file release-artifacts/v1.5.8/notes.md

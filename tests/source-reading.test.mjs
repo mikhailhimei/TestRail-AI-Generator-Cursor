@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { runCodex, checkSourcePaths, extractSourcePaths, sourceWorkingDirectory } from '../testrail-chat/runtime/codex-bridge.mjs';
+import { runCodex, checkSourcePaths, extractSourcePaths, sourceWorkingDirectory, codexGenerationArgs } from '../testrail-chat/runtime/codex-bridge.mjs';
 
 test('requirements paths are checked on the server before starting generation', async () => {
   const missing = '/home/testrail-source-fixture-not-present/project';
@@ -74,4 +74,38 @@ test('Windows drive paths, quoted spaces and UNC paths require explicit permissi
   assert.equal(await sourceWorkingDirectory([windows], { platform: 'win32', statFile }), windows);
   assert.equal(await sourceWorkingDirectory([windows + String.raw`\page.ts`], { platform: 'win32', statFile: async () => ({ isDirectory: () => false }) }), windows);
   await assert.rejects(checkSourcePaths('Проект D:/missing', true, { platform: 'win32', statFile: async () => { throw Object.assign(Error('missing'), { code: 'ENOENT' }); }, accessFile }), /Исходники недоступны.*ENOENT/);
+});
+
+test('isolated Windows generation explicitly selects a read-only native sandbox', () => {
+  const args = codexGenerationArgs(true, 'win32');
+  assert.equal(args[args.indexOf('--sandbox') + 1], 'read-only');
+  assert.equal(args[args.indexOf('--ask-for-approval') + 1], 'never');
+  assert.ok(args.includes('windows.sandbox="elevated"'));
+  assert.ok(args.includes('--ignore-user-config'));
+  assert.ok(!args.includes('--dangerously-bypass-approvals-and-sandbox'));
+  assert.ok(!args.includes('--add-dir'));
+  assert.ok(!args.includes('shell_tool'));
+  assert.ok(!codexGenerationArgs(true, 'linux').includes('--config'));
+  const disabled = codexGenerationArgs(false, 'win32');
+  assert.ok(disabled.includes('shell_tool'));
+  assert.ok(disabled.includes('unified_exec'));
+  assert.ok(!disabled.includes('--config'));
+});
+
+
+test('CLI cancellation preserves AbortError and a missing executable reports the actual cause', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'testrail-source-abort-'));
+  const saved = process.env.CODEX_BIN;
+  try {
+    const fixture = path.join(dir, 'cli.mjs');
+    await writeFile(fixture, 'process.stdin.resume(); setInterval(() => {}, 1000);');
+    process.env.CODEX_BIN = fixture;
+    await assert.rejects(runCodex({ prompt: 'NO_SOURCE', systemPrompt: '', images: [] },
+      AbortSignal.timeout(200)), error => error.name === 'AbortError');
+    process.env.CODEX_BIN = path.join(dir, 'missing-codex.exe');
+    await assert.rejects(runCodex({ prompt: 'NO_SOURCE', systemPrompt: '', images: [] }), /Codex CLI не найден/);
+  } finally {
+    if (saved === undefined) delete process.env.CODEX_BIN; else process.env.CODEX_BIN = saved;
+    await rm(dir, { recursive: true, force: true });
+  }
 });

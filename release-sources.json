@@ -1,8 +1,8 @@
 {
-  "release": "v1.5.7",
+  "release": "v1.5.8",
   "chrome_extension": {
     "repository": "mikhailhimei/TestRail-AI-Generator",
-    "commit": "1cbbdceac0cd660b75339c00ead6c247c1bc8a58",
+    "commit": "bcccd7e4ae38fd9a62a4fba6b694b9c62427a62e",
     "branch": "release/json-mocks-all-mcp",
     "manifest_version": "1.1.8",
     "build": "npm ci && npm run build"
